@@ -3,106 +3,88 @@ package main
 import (
 	"encoding/csv"
 	"flag"
+	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/tealeg/xlsx"
+	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/transform"
 )
 
-func failOnError(err error) {
-	if err != nil {
-		log.Fatal("Error:", err)
-	}
-}
-
 func main() {
+
+	// ログの設定
+	//LogSettings("log.txt")
+	LogWrite("Start", nil)
+
+	// 入力ファイル名
 	flag.Parse()
+	textFilePath := flag.Arg(0)
 
-	// ログファイル準備
-	logfile, err := os.OpenFile("./log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
-	failOnError(err)
-	defer logfile.Close()
+	// 出力ファイル名
+	excelDir, excelFilePath := filepath.Split(flag.Arg(0))
+	pos := strings.LastIndex(excelFilePath, ".")
+	excelFileName := excelDir + excelFilePath[:pos] + ".xlsx"
 
-	log.SetOutput(logfile)
+	//テキストファイルの読み込み
+	textFile, err := os.Open(textFilePath)
+	LogFatal("テキストファイルの読み込みができませんでした。", err)
+	defer textFile.Close()
 
-	//log.SetOutput(os.Stdout)
-
-	log.Print("Start\r\n")
-
-	// ファイルを読み込んで二次元配列に入れる
-	records := readfile(flag.Arg(0))
-
-	// ファイルをエクセルに出力
-	saveExcel(flag.Arg(0), records)
-
-}
-
-func readfile(filename string) [][]string {
-	//入力ファイル準備
-	infile, err := os.Open(filename)
-	failOnError(err)
-	defer infile.Close()
-
-	reader := csv.NewReader(transform.NewReader(infile, japanese.ShiftJIS.NewDecoder()))
+	reader := csv.NewReader(transform.NewReader(textFile, japanese.ShiftJIS.NewDecoder()))
 	reader.Comma = '\t'
 
-	//CSVファイルを２次元配列に展開
+	// excelファイルの作成
+	excelFile := excelize.NewFile()
+	defer func() {
+		err := excelFile.Close()
+		LogFatal("エクセルファイルがクローズできない。", err)
+	}()
 
-	readrecords := make([][]string, 0)
-	record, err := reader.Read() // 1行読み出す
-	if err == io.EOF {
-		return readrecords
-	} else {
-		failOnError(err)
-	}
-	colMax := len(record) - 1
-	readrecords = append(readrecords, record[:colMax])
+	// ワークシートの設定
+	excelFile.SetDefaultFont("游ゴシック")
+	err = excelFile.SetSheetName("Sheet1", "データ") //デフォルトのシート名を"データ"に変更
+	LogFatal("シート名が変更できませんでした。", err)
 
+	// ストリームライターの設定(大容量ファイル対応の為)
+	streamWriter, err := excelFile.NewStreamWriter("データ")
+	LogFatal("ストリームライターの設定ができませんでした。", err)
+
+	rowCount := 1
 	for {
-		record, err := reader.Read()[:colMax] // 1行読み出す
+		textItems, err := reader.Read() //1行読みだす
+		// _, err := reader.Read() //1行読みだす
 		if err == io.EOF {
 			break
 		} else {
-			log.Print(record)
-			log.Print(len(record))
-			failOnError(err)
+			LogFatal("テキストファイルの読み込みエラー", err)
 		}
 
-		readrecords = append(readrecords, record[:colMax])
-	}
-
-	return readrecords
-}
-
-func saveExcel(filename string, recs [][]string) {
-	var file *xlsx.File
-	var sheet *xlsx.Sheet
-	var err error
-
-	//出力ファイル準備
-	outDir, outfileName := filepath.Split(filename)
-	pos := strings.LastIndex(outfileName, ".")
-	outExcelName := outDir + outfileName[:pos] + ".xlsx"
-
-	file = xlsx.NewFile()
-	xlsx.SetDefaultFont(11, "ＭＳ Ｐゴシック") // デフォルトのフォントを指定
-	sheet, err = file.AddSheet("データ")
-	failOnError(err)
-
-	for r, recRow := range recs {
-		for c, recCell := range recRow {
-			sheet.Cell(r, c).Value = recCell
+		// ストリームライターに１行書きだす
+		var rowItems []interface{}
+		for _, v := range textItems {
+			rowItems = append(rowItems, v)
 		}
+		err = streamWriter.SetRow(fmt.Sprintf("A%d", rowCount), rowItems)
+		LogFatal("行に値を設定できませんでした。", err)
+
+		// 1000件毎にログを表示する
+		if rowCount % 1000 == 0 {
+			LogWrite("処理中", fmt.Errorf("%d...", rowCount))
+		}
+
+		rowCount++
+
 	}
 
-	err = file.Save(outExcelName)
-	failOnError(err)
+	err = streamWriter.Flush()
+	LogFatal("ストリームライターを終了できませんでした。", err)
 
-	log.Print("Finesh !\r\n")
+	err = excelFile.SaveAs(excelFileName)
+	LogFatal("エクセルファイルを保存できませんでした。", err)
 
+	LogWrite("Finish!", nil)
 }
