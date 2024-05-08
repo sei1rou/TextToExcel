@@ -64,9 +64,13 @@ func main() {
 		}
 
 		// ストリームライターに１行書きだす
-		var rowItems []interface{}
-		for _, v := range textItems {
-			rowItems = append(rowItems, v)
+		// var rowItems []interface{}
+		rowItems := make([]interface{}, len(textItems), len(textItems))
+		for i, v := range textItems {
+			//rowItems = append(rowItems, v)
+			if v != "" {
+				rowItems[i] = v
+			}
 		}
 		err = streamWriter.SetRow(fmt.Sprintf("A%d", rowCount), rowItems)
 		LogFatal("行に値を設定できませんでした。", err)
